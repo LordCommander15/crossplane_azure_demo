@@ -153,9 +153,9 @@ spec:
 apiVersion: pkg.crossplane.io/v1
 kind: Provider
 metadata:
-  name: provider-azure-azure
+  name: provider-azure-management
 spec:
-  package: xpkg.upbound.io/upbound/provider-azure-azure:v1.10.0
+  package: xpkg.upbound.io/upbound/provider-azure-management:v1.10.0
 EOF
 
 info "Waiting for providers to become healthy (up to 5 min)..."
