@@ -1,0 +1,26 @@
+###############################################################################
+# Crossplane Providers & Functions
+#
+# These are applied by the infra-setup.sh script during initial bootstrap.
+# Argo CD also syncs this folder for ongoing drift correction.
+###############################################################################
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
+  name: function-patch-and-transform
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.7.0
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-azure-dbforpostgresql
+spec:
+  package: xpkg.upbound.io/upbound/provider-azure-dbforpostgresql:v1.10.0
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-azure-azure
+spec:
+  package: xpkg.upbound.io/upbound/provider-azure-azure:v1.10.0

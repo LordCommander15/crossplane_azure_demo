@@ -1,0 +1,40 @@
+###############################################################################
+# ApplicationSet: infrastructure
+#
+# Uses the Git Generator (directories) to discover every resource set under
+# /infrastructure/<name>.  Each folder is synced as its own Argo CD
+# Application, keeping XRDs, Compositions, and other Crossplane resources
+# under GitOps drift correction.
+###############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: infrastructure
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+        revision: HEAD
+        directories:
+          - path: "infrastructure/*"
+  template:
+    metadata:
+      name: "infra-{{ .path.basename }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+        targetRevision: HEAD
+        path: "{{ .path.path }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: crossplane-system
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          - CreateNamespace=true
