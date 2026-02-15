@@ -1,0 +1,48 @@
+###############################################################################
+# Harbor — lightweight values
+#   - Trivy & Notary disabled to save resources
+#   - Proxy cache project "dockerhub-proxy" pre-configured to mirror Docker Hub
+###############################################################################
+expose:
+  type: clusterIP
+  tls:
+    enabled: false
+
+externalURL: https://harbor.demo.com
+
+trivy:
+  enabled: false
+
+notary:
+  enabled: false
+
+persistence:
+  persistentVolumeClaim:
+    registry:
+      size: 5Gi
+    database:
+      size: 1Gi
+    redis:
+      size: 1Gi
+
+harborAdminPassword: "ChangeMeNow!"              # ← change for production
+
+# ── Proxy Cache (pull-through) ───────────────────────────────────────────────
+# After Harbor starts, create a proxy-cache project via the API or UI:
+#
+#   1. Log in to https://harbor.demo.com
+#   2. New Project → Name: "dockerhub-proxy"
+#      → Check "Proxy Cache" → Endpoint: https://hub.docker.com
+#
+# Or automate it with the Harbor API:
+#
+#   curl -u admin:ChangeMeNow! -X POST https://harbor.demo.com/api/v2.0/registries \
+#     -H 'Content-Type: application/json' \
+#     -d '{"name":"dockerhub","type":"docker-hub","url":"https://hub.docker.com"}'
+#
+#   curl -u admin:ChangeMeNow! -X POST https://harbor.demo.com/api/v2.0/projects \
+#     -H 'Content-Type: application/json' \
+#     -d '{"project_name":"dockerhub-proxy","registry_id":1,"metadata":{"public":"true"}}'
+#
+# Then pull images as:  harbor.demo.com/dockerhub-proxy/library/nginx:latest
+# Harbor fetches from Docker Hub on first pull and caches locally.

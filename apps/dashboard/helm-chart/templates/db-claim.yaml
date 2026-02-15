@@ -1,0 +1,25 @@
+###############################################################################
+# db-claim.yaml
+#
+# Crossplane PostgreSQLInstance claim — deployed as part of the Helm chart
+# so that the database is provisioned automatically when the app is installed.
+#
+# Before deploying, create the admin-password secret:
+#   kubectl create secret generic dashboard-db-pg-password \
+#     --namespace crossplane-system \
+#     --from-literal=password='<strong-password>'
+###############################################################################
+apiVersion: database.platform.io/v1alpha1
+kind: PostgreSQLInstance
+metadata:
+  name: dashboard-db
+spec:
+  parameters:
+    storageGB: {{ .Values.db.storageGB }}
+    version: {{ .Values.db.version | quote }}
+  compositionSelector:
+    matchLabels:
+      provider: azure
+      service: postgresql
+  writeConnectionSecretToRef:
+    name: {{ .Values.db.connectionSecretName }}

@@ -1,0 +1,47 @@
+###############################################################################
+# ApplicationSet: platform-services
+#
+# Uses the Git Generator (directories) to discover every service under
+# /platform/services/<name>.  Each folder must contain:
+#   - chart/   — the vendored Helm chart
+#   - values.yaml — overrides applied on top of the chart defaults
+#
+# Charts are stored locally in the repo (vendored) so there is no
+# dependency on external Helm repositories at deploy time.
+###############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform-services
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+        revision: HEAD
+        directories:
+          - path: "platform/services/*"
+  template:
+    metadata:
+      name: "platform-{{ .path.basename }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+        targetRevision: HEAD
+        path: "{{ .path.path }}/chart"
+        helm:
+          releaseName: "{{ .path.basename }}"
+          valueFiles:
+            - "../values.yaml"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .path.basename }}"
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          - CreateNamespace=true

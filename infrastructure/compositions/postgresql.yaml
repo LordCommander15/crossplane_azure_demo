@@ -1,0 +1,120 @@
+###############################################################################
+# Composition: XPostgreSQLInstance → Azure Flexible Server
+#
+# Uses function-patch-and-transform (pipeline mode).
+# SKU is pinned to Standard_B1ms to optimise cost.
+###############################################################################
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xpostgresqlinstance-azure
+  labels:
+    provider: azure
+    service: postgresql
+spec:
+  compositeTypeRef:
+    apiVersion: database.platform.io/v1alpha1
+    kind: XPostgreSQLInstance
+  mode: Pipeline
+  pipeline:
+    ###########################################################################
+    # Step 1 — Patch & Transform
+    ###########################################################################
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          ###################################################################
+          # Resource Group
+          ###################################################################
+          - name: resource-group
+            base:
+              apiVersion: azure.upbound.io/v1beta1
+              kind: ResourceGroup
+              spec:
+                forProvider:
+                  location: westeurope
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: metadata.name
+                toFieldPath: metadata.annotations[crossplane.io/external-name]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "rg-%s"
+
+          ###################################################################
+          # Flexible Server
+          ###################################################################
+          - name: pg-server
+            base:
+              apiVersion: dbforpostgresql.azure.upbound.io/v1beta2
+              kind: FlexibleServer
+              spec:
+                forProvider:
+                  location: westeurope
+                  resourceGroupNameSelector:
+                    matchControllerRef: true
+                  administratorLogin: pgadmin
+                  administratorPasswordSecretRef:
+                    key: password
+                    name: ""                       # patched below
+                    namespace: crossplane-system
+                  skuName: Standard_B1ms           # budget-friendly
+                  storageMb: 32768                 # patched below
+                  version: "16"                    # patched below
+                  zone: "1"
+            patches:
+              # storage
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.parameters.storageGB
+                toFieldPath: spec.forProvider.storageMb
+                transforms:
+                  - type: math
+                    math:
+                      type: Multiply
+                      multiply: 1024
+              # version
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.parameters.version
+                toFieldPath: spec.forProvider.version
+              # password secret name  (convention: <claim-name>-pg-password)
+              - type: FromCompositeFieldPath
+                fromFieldPath: metadata.name
+                toFieldPath: spec.forProvider.administratorPasswordSecretRef.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "%s-pg-password"
+            connectionDetails:
+              - name: host
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.fqdn
+              - name: port
+                type: FromValue
+                value: "5432"
+              - name: username
+                type: FromValue
+                value: pgadmin
+              - name: password
+                type: FromConnectionSecretKey
+                fromConnectionSecretKey: attribute.administrator_password
+
+          ###################################################################
+          # Firewall Rule — allow Azure services
+          ###################################################################
+          - name: firewall-rule-azure
+            base:
+              apiVersion: dbforpostgresql.azure.upbound.io/v1beta1
+              kind: FlexibleServerFirewallRule
+              spec:
+                forProvider:
+                  serverIdSelector:
+                    matchControllerRef: true
+                  startIpAddress: "0.0.0.0"
+                  endIpAddress: "0.0.0.0"

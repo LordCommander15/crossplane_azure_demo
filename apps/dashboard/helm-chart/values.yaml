@@ -1,0 +1,37 @@
+###############################################################################
+# Dashboard Helm values
+###############################################################################
+replicaCount: 1
+
+image:
+  # Pulled via Harbor proxy-cache project "dockerhub-proxy" which mirrors Docker Hub.
+  # Push your image to Docker Hub as lordcommander15/dashboard:latest,
+  # then Harbor will cache it transparently on first pull.
+  repository: harbor.demo.com/dockerhub-proxy/lordcommander15/dashboard
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: nginx
+  host: dashboard.demo.com
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# ── Database claim parameters ────────────────────────────────────────────────
+db:
+  name: postgres
+  storageGB: 32
+  version: "16"
+  connectionSecretName: dashboard-db-conn

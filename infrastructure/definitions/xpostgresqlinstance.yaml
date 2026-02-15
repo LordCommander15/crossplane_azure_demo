@@ -1,0 +1,52 @@
+###############################################################################
+# XRD: XPostgreSQLInstance
+#
+# Platform API that developers use to request a managed PostgreSQL database.
+# Claim kind: PostgreSQLInstance
+###############################################################################
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xpostgresqlinstances.database.platform.io
+spec:
+  group: database.platform.io
+  names:
+    kind: XPostgreSQLInstance
+    plural: xpostgresqlinstances
+  claimNames:
+    kind: PostgreSQLInstance
+    plural: postgresqlinstances
+  connectionSecretKeys:
+    - host
+    - port
+    - username
+    - password
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  description: Database configuration exposed to developers.
+                  properties:
+                    storageGB:
+                      type: integer
+                      description: "Storage size in GiB."
+                      default: 32
+                      minimum: 32
+                      maximum: 128
+                    version:
+                      type: string
+                      description: "PostgreSQL major version."
+                      default: "16"
+                      enum: ["14", "15", "16"]
+                  required: []
+              required:
+                - parameters

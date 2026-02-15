@@ -1,0 +1,30 @@
+###############################################################################
+# Root Application  (App-of-Apps pattern)
+#
+# Points Argo CD at /bootstrap/sets — every ApplicationSet file found there
+# is synced automatically, bootstrapping the entire platform.
+#
+# targetRevision: HEAD follows the repo's default branch.
+# To test a feature branch, either:
+#   1. Change targetRevision below to the branch name, e.g. "feature/my-branch"
+#   2. Or override via Argo CD CLI:
+#      argocd app set root --revision feature/my-branch
+###############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+    targetRevision: HEAD
+    path: bootstrap/sets
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true

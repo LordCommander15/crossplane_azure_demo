@@ -1,1 +1,0 @@
-# Crossplane Azure Platform Demo

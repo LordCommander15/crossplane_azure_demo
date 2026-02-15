@@ -1,0 +1,17 @@
+###############################################################################
+# ingress-nginx — minimal values for AKS
+###############################################################################
+controller:
+  replicaCount: 1
+  service:
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /healthz
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  admissionWebhooks:
+    enabled: false
