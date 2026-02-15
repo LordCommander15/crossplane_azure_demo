@@ -159,7 +159,19 @@ spec:
 EOF
 
 info "Waiting for providers to become healthy (up to 5 min)..."
-kubectl wait provider --all --for=condition=Healthy --timeout=300s
+# Wait for each provider individually — avoids hanging on stale/deleted providers
+for p in function-patch-and-transform provider-azure-dbforpostgresql provider-azure-management; do
+  if kubectl get provider "$p" &>/dev/null; then
+    info "  Waiting for $p..."
+    kubectl wait "provider/$p" --for=condition=Healthy --timeout=300s || \
+      warn "Provider $p did not become healthy in time — check: kubectl describe provider $p"
+  fi
+done
+# The family provider is auto-installed as a dependency; wait for it too
+if kubectl get provider upbound-provider-family-azure &>/dev/null; then
+  info "  Waiting for upbound-provider-family-azure..."
+  kubectl wait "provider/upbound-provider-family-azure" --for=condition=Healthy --timeout=300s || true
+fi
 
 ###############################################################################
 # 7. Azure Service Principal + ProviderConfig
