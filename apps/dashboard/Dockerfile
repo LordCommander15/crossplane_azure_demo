@@ -1,7 +1,7 @@
 ###############################################################################
 # Dockerfile — Global Warning System Dashboard
 ###############################################################################
-FROM python:3.12-slim AS base
+FROM mcr.microsoft.com/devcontainers/python:3.12 AS base
 
 WORKDIR /app
 

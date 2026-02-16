@@ -3,6 +3,8 @@
 #
 # Platform API that developers use to request a managed PostgreSQL database.
 # Claim kind: PostgreSQLInstance
+#
+# Note: Using v1 because v2 does not support Claims or connectionSecretKeys.
 ###############################################################################
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
@@ -47,6 +49,10 @@ spec:
                       description: "PostgreSQL major version."
                       default: "16"
                       enum: ["14", "15", "16"]
+                    location:
+                      type: string
+                      description: "Azure region for the database resources."
+                      default: "westeurope"
                   required: []
               required:
                 - parameters

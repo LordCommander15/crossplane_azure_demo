@@ -4,11 +4,18 @@
 #   - Proxy cache project "dockerhub-proxy" pre-configured to mirror Docker Hub
 ###############################################################################
 expose:
-  type: clusterIP
+  type: ingress
   tls:
     enabled: false
+  ingress:
+    hosts:
+      core: harbor.40.74.14.21.nip.io
+    className: nginx
+    controller: default
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
 
-externalURL: https://harbor.demo.com
+externalURL: http://harbor.40.74.14.21.nip.io
 
 trivy:
   enabled: false

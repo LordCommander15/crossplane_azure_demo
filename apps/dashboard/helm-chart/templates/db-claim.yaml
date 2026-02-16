@@ -17,6 +17,7 @@ spec:
   parameters:
     storageGB: {{ .Values.db.storageGB }}
     version: {{ .Values.db.version | quote }}
+    location: {{ .Values.db.location | quote }}
   compositionSelector:
     matchLabels:
       provider: azure

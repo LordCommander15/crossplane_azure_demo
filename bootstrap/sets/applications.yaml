@@ -1,0 +1,42 @@
+###############################################################################
+# ApplicationSet: applications
+#
+# Uses the Git Generator (directories) to discover every app under
+# /apps/<name>.  Each folder must contain:
+#   - helm-chart/   — the application Helm chart
+#
+# This brings application deployments under full Argo CD GitOps management
+# with automatic sync and drift correction.
+###############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: applications
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+        revision: HEAD
+        directories:
+          - path: "apps/*"
+  template:
+    metadata:
+      name: "app-{{ .path.basename }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/LordCommander15/crossplane_azure_demo.git
+        targetRevision: HEAD
+        path: "{{ .path.path }}/helm-chart"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .path.basename }}"
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          - CreateNamespace=true

@@ -4,12 +4,17 @@
 replicaCount: 1
 
 image:
-  # Pulled via Harbor proxy-cache project "dockerhub-proxy" which mirrors Docker Hub.
-  # Push your image to Docker Hub as lordcommander15/dashboard:latest,
-  # then Harbor will cache it transparently on first pull.
-  repository: harbor.demo.com/dockerhub-proxy/lordcommander15/dashboard
+  # Image is pushed to Harbor's local 'dashboard' project.
+  # Push via port-forward:
+  #   kubectl port-forward svc/harbor -n harbor 8880:80 &
+  #   docker login localhost:8880 -u admin
+  #   docker tag dashboard:latest localhost:8880/dashboard/dashboard:latest
+  #   docker push localhost:8880/dashboard/dashboard:latest
+  #
+  # In-cluster, pods pull via the Harbor K8s service DNS name.
+  repository: harbor.harbor.svc.cluster.local/dashboard/dashboard
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 service:
   type: ClusterIP
@@ -17,9 +22,9 @@ service:
   targetPort: 8080
 
 ingress:
-  enabled: false
+  enabled: true
   className: nginx
-  host: dashboard.demo.com
+  host: dashboard.40.74.14.21.nip.io
 
 resources:
   requests:
@@ -34,4 +39,5 @@ db:
   name: postgres
   storageGB: 32
   version: "16"
+  location: westeurope
   connectionSecretName: dashboard-db-conn
