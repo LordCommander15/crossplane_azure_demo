@@ -4,15 +4,12 @@
 replicaCount: 1
 
 image:
-  # Image is pushed to Harbor's local 'dashboard' project.
-  # Push via port-forward:
-  #   kubectl port-forward svc/harbor -n harbor 8880:80 &
-  #   docker login localhost:8880 -u admin
-  #   docker tag dashboard:latest localhost:8880/dashboard/dashboard:latest
-  #   docker push localhost:8880/dashboard/dashboard:latest
-  #
-  # In-cluster, pods pull via the Harbor K8s service DNS name.
-  repository: harbor.harbor.svc.cluster.local/dashboard/dashboard
+  # AKS nodes pull from ACR via managed identity (no imagePullSecret needed).
+  # Push:
+  #   az acr login --name acrplatformdemo
+  #   docker tag dashboard:latest acrplatformdemo.azurecr.io/dashboard/dashboard:latest
+  #   docker push acrplatformdemo.azurecr.io/dashboard/dashboard:latest
+  repository: acrplatformdemo.azurecr.io/dashboard/dashboard
   tag: latest
   pullPolicy: Always
 
