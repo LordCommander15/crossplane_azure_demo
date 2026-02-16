@@ -69,7 +69,7 @@ spec:
                     key: password
                     name: ""                       # patched below
                     namespace: crossplane-system
-                  skuName: Standard_B1ms           # budget-friendly
+                  skuName: B_Standard_B1ms         # Burstable tier, budget-friendly
                   storageMb: 32768                 # patched below
                   version: "16"                    # patched below
                   zone: "1"
