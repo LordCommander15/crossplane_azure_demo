@@ -93,7 +93,7 @@ spec:
                 toFieldPath: spec.forProvider.location
               # password secret name  (convention: <claim-name>-pg-password)
               - type: FromCompositeFieldPath
-                fromFieldPath: metadata.name
+                fromFieldPath: spec.claimRef.name
                 toFieldPath: spec.forProvider.administratorPasswordSecretRef.name
                 transforms:
                   - type: string

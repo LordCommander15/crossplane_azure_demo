@@ -11,10 +11,11 @@
 #    6. Azure Workload Identity + ProviderConfig
 #    7. XRD + Composition (kubectl apply)
 #    8. Argo CD root Application (app-of-apps bootstrap)
-#    9. PostgreSQL admin password secret
-#   10. Wait for platform services (Harbor, ingress-nginx)
-#   11. Configure Harbor proxy-cache project
-#   12. Build & push dashboard image (Docker Hub + Harbor)
+#    9. Azure Container Registry (ACR) — create + attach to AKS
+#   10. PostgreSQL admin password secret
+#   11. Wait for platform services (Harbor, ingress-nginx)
+#   12. Configure Harbor proxy-cache project
+#   13. Build & push dashboard image to ACR
 ###############################################################################
 set -euo pipefail
 
@@ -28,6 +29,7 @@ LOCATION="${LOCATION:-westeurope}"
 K8S_VERSION="${K8S_VERSION:-1.34.2}"
 NODE_COUNT="${NODE_COUNT:-1}"
 NODE_VM_SIZE="${NODE_VM_SIZE:-Standard_B2s}"
+ACR_NAME="${ACR_NAME:-acrplatformdemo}"
 HARBOR_ADMIN_PASS="${HARBOR_ADMIN_PASS:-ChangeMeNow!}"
 HARBOR_PF_PORT=8880
 #──────────────────────────────────────────────────────────────────────────────
@@ -332,7 +334,20 @@ for PROVIDER_SA in "${DISCOVERED_SAS[@]}"; do
     --overwrite
 done
 
-# Restart provider pods to pick up the new service account annotations
+# Add Workload Identity pod label to provider deployments so the AKS
+# mutating webhook injects the OIDC projected token volume.
+# (The webhook filters on pod label azure.workload.identity/use=true)
+info "Adding Workload Identity pod label to provider deployments"
+for PROVIDER_SA in "${DISCOVERED_SAS[@]}"; do
+  DEP_NAME="$PROVIDER_SA"   # deployment name matches SA name
+  if kubectl get deployment "$DEP_NAME" -n crossplane-system &>/dev/null; then
+    kubectl patch deployment "$DEP_NAME" -n crossplane-system --type=merge \
+      -p '{"spec":{"template":{"metadata":{"labels":{"azure.workload.identity/use":"true"}}}}}' 2>/dev/null || true
+    info "  Patched deployment $DEP_NAME"
+  fi
+done
+
+# Restart provider pods to pick up the new service account annotations + pod labels
 info "Restarting provider pods to apply Workload Identity configuration"
 kubectl delete pods -n crossplane-system -l pkg.crossplane.io/provider --wait=false 2>/dev/null || true
 
@@ -363,6 +378,32 @@ kubectl apply -f "$REPO_ROOT/infrastructure/compositions/"
 ###############################################################################
 info "Applying Argo CD root Application"
 kubectl apply -f "$REPO_ROOT/bootstrap/root.yaml"
+
+###############################################################################
+# 9. Azure Container Registry (ACR)
+###############################################################################
+info "Setting up Azure Container Registry: $ACR_NAME"
+if az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  info "ACR $ACR_NAME already exists — skipping creation"
+else
+  az acr create \
+    --name "$ACR_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --sku Basic \
+    --location "$LOCATION" \
+    --output none
+fi
+
+ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+info "ACR login server: $ACR_LOGIN_SERVER"
+
+# Attach ACR to AKS (grants AcrPull role to kubelet identity — idempotent)
+info "Attaching ACR to AKS cluster"
+az aks update \
+  --name "$CLUSTER_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --attach-acr "$ACR_NAME" \
+  --output none 2>/dev/null || info "ACR already attached"
 
 ###############################################################################
 # 10. Create PostgreSQL admin password secret
@@ -525,30 +566,34 @@ else
 fi
 
 ###############################################################################
-# 13. Build dashboard image locally
+# 13. Build & push dashboard image to ACR
 ###############################################################################
 if $HAS_DOCKER; then
   IMAGE_TAG="$(date +%Y%m%d)-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)"
+  ACR_IMAGE="${ACR_LOGIN_SERVER}/dashboard/dashboard"
 
-  info "Building dashboard image locally"
+  info "Logging in to ACR"
+  az acr login --name "$ACR_NAME" 2>/dev/null || warn "ACR login failed — image push will be skipped"
+
+  info "Building dashboard image"
   docker build \
-    -t "dashboard:${IMAGE_TAG}" \
-    -t "dashboard:latest" \
+    -t "${ACR_IMAGE}:${IMAGE_TAG}" \
+    -t "${ACR_IMAGE}:latest" \
     "$REPO_ROOT/apps/dashboard"
 
-  info "Image built and available locally:"
-  echo "    dashboard:${IMAGE_TAG}"
-  echo "    dashboard:latest"
-  echo ""
-  echo "  To push to Harbor manually:"
-  echo "    kubectl port-forward svc/harbor -n harbor ${HARBOR_PF_PORT}:80 &"
-  echo "    docker login localhost:${HARBOR_PF_PORT} -u admin -p '${HARBOR_ADMIN_PASS}'"
-  echo "    docker tag dashboard:latest localhost:${HARBOR_PF_PORT}/dashboard/dashboard:latest"
-  echo "    docker push localhost:${HARBOR_PF_PORT}/dashboard/dashboard:latest"
+  info "Pushing dashboard image to ACR"
+  docker push "${ACR_IMAGE}:${IMAGE_TAG}" || warn "Push of tag ${IMAGE_TAG} failed"
+  docker push "${ACR_IMAGE}:latest" || warn "Push of tag latest failed"
+
+  info "Image pushed to ACR:"
+  echo "    ${ACR_IMAGE}:${IMAGE_TAG}"
+  echo "    ${ACR_IMAGE}:latest"
 else
   warn "Docker not available — skipping image build."
-  warn "Build manually:"
-  warn "  docker build -t dashboard:latest apps/dashboard/"
+  warn "Build and push manually:"
+  warn "  az acr login --name $ACR_NAME"
+  warn "  docker build -t ${ACR_LOGIN_SERVER:-acrplatformdemo.azurecr.io}/dashboard/dashboard:latest apps/dashboard/"
+  warn "  docker push ${ACR_LOGIN_SERVER:-acrplatformdemo.azurecr.io}/dashboard/dashboard:latest"
 fi
 
 # Clean up port-forward
@@ -563,6 +608,7 @@ echo ""
 echo "  ── Azure ──────────────────────────────────────────────────────────"
 echo "    Resource Group : $RESOURCE_GROUP"
 echo "    AKS Cluster    : $CLUSTER_NAME"
+echo "    ACR            : ${ACR_LOGIN_SERVER:-$ACR_NAME}"
 echo "    Managed Identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
 echo ""
 echo "  ── Reconnect ────────────────────────────────────────────────────"
