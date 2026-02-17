@@ -490,6 +490,21 @@ if [[ -n "$LB_IP" ]]; then
     "$REPO_ROOT/platform/services/harbor/values.yaml"
   sed -i "s|host: dashboard\..*\.nip\.io|host: ${DASHBOARD_HOST}|" \
     "$REPO_ROOT/apps/dashboard/helm-chart/values.yaml"
+
+  # Commit + push updated hostnames so Argo CD picks them up
+  info "Committing updated nip.io hostnames to Git"
+  git -C "$REPO_ROOT" add -A
+  git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null || \
+    git -C "$REPO_ROOT" commit -m "auto: update nip.io hostnames to ${LB_IP}" --quiet
+  git -C "$REPO_ROOT" push --quiet 2>/dev/null || warn "Git push failed — push manually after script completes"
+
+  # Force Argo CD to re-sync Harbor and Dashboard with updated hostnames
+  info "Syncing Argo CD apps with updated hostnames"
+  kubectl patch application platform-harbor -n argocd --type merge \
+    -p '{"operation":{"initiatedBy":{"username":"admin"},"sync":{"revision":"HEAD"}}}' 2>/dev/null || true
+  kubectl patch application app-dashboard -n argocd --type merge \
+    -p '{"operation":{"initiatedBy":{"username":"admin"},"sync":{"revision":"HEAD"}}}' 2>/dev/null || true
+  sleep 10  # give Argo CD a moment to pick up the sync
 else
   warn "Could not discover LoadBalancer IP — ingress hostnames not configured."
   warn "Run: kubectl get svc -n ingress  to find the IP, then update values manually."
