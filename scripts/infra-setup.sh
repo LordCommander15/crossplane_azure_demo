@@ -3,19 +3,20 @@
 # infra-setup.sh  (idempotent — safe to re-run)
 #
 # Bootstraps the entire platform end-to-end:
-#    1. Azure Resource Group + AKS cluster
-#    2. Argo CD  (Helm)
-#    3. Crossplane (Helm)
-#    4. GitHub repo credentials for Argo CD
-#    5. Crossplane providers + functions
-#    6. Azure Workload Identity + ProviderConfig
-#    7. XRD + Composition (kubectl apply)
-#    8. Argo CD root Application (app-of-apps bootstrap)
+#    1. Azure Resource Group + resource provider registration
+#    2. AKS cluster
+#    3. Argo CD  (Helm)
+#    4. Crossplane (Helm)
+#    5. GitHub repo credentials for Argo CD + git push auth
+#    6. Crossplane providers + functions
+#    7. Azure Workload Identity + ProviderConfig
+#    8. XRD + Composition (kubectl apply)
 #    9. Azure Container Registry (ACR) — create + attach to AKS
 #   10. PostgreSQL admin password secret
-#   11. Wait for platform services (Harbor, ingress-nginx)
-#   12. Configure Harbor proxy-cache project
-#   13. Build & push dashboard image to ACR
+#   11. Argo CD root Application (app-of-apps bootstrap)
+#   12. Wait for platform services (Harbor, ingress-nginx)
+#   13. Configure Harbor proxy-cache project
+#   14. Build & push dashboard image to ACR
 ###############################################################################
 set -euo pipefail
 
@@ -134,12 +135,19 @@ helm upgrade --install crossplane crossplane-stable/crossplane \
   --wait --timeout 5m
 
 ###############################################################################
-# 5. GitHub Repo Credentials for Argo CD
+# 5. GitHub Repo Credentials for Argo CD + git push authentication
 ###############################################################################
 info "Configuring Argo CD repository credentials"
 
+GITHUB_REPO_URL=""
+GITHUB_PAT=""
+
 if kubectl get secret argocd-repo-creds -n argocd &>/dev/null; then
-  info "Argo CD repo credentials already exist — skipping"
+  info "Argo CD repo credentials already exist — extracting for git push"
+  GITHUB_REPO_URL=$(kubectl get secret argocd-repo-creds -n argocd \
+    -o jsonpath='{.data.url}' | base64 -d 2>/dev/null || true)
+  GITHUB_PAT=$(kubectl get secret argocd-repo-creds -n argocd \
+    -o jsonpath='{.data.password}' | base64 -d 2>/dev/null || true)
 else
   read -rp "Enter your GitHub Repo URL (e.g. https://github.com/org/repo.git): " GITHUB_REPO_URL
   [[ -z "$GITHUB_REPO_URL" ]] && error "Repo URL cannot be empty."
@@ -165,12 +173,19 @@ stringData:
 EOF
 fi
 
+# Configure git remote with PAT so automated pushes (nip.io hostname updates) work
+if [[ -n "$GITHUB_PAT" && -n "$GITHUB_REPO_URL" ]]; then
+  AUTHED_URL=$(echo "$GITHUB_REPO_URL" | sed "s|https://|https://git:${GITHUB_PAT}@|")
+  git -C "$REPO_ROOT" remote set-url origin "$AUTHED_URL" 2>/dev/null || true
+  info "Git remote configured for authenticated pushes"
+fi
+
 ###############################################################################
 # 6. Crossplane Providers + Function
 ###############################################################################
 info "Installing Crossplane providers and functions"
 
-kubectl apply -f - <<'EOF'
+kubectl apply -f - <<'PROVIDERS_EOF'
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
@@ -191,10 +206,9 @@ metadata:
   name: provider-azure-management
 spec:
   package: xpkg.upbound.io/upbound/provider-azure-management:v1.10.0
-EOF
+PROVIDERS_EOF
 
 info "Waiting for providers to become healthy (up to 5 min)..."
-# Wait for each provider individually — avoids hanging on stale/deleted providers
 for p in function-patch-and-transform provider-azure-dbforpostgresql provider-azure-management; do
   if kubectl get provider "$p" &>/dev/null; then
     info "  Waiting for $p..."
@@ -237,16 +251,16 @@ info "Managed Identity Client ID: $IDENTITY_CLIENT_ID"
 
 # Assign Contributor role to the managed identity (idempotent)
 info "Assigning Contributor role to Managed Identity"
-# Check if role already assigned
-if ! az role assignment list \
+EXISTING_ROLE=$(az role assignment list \
   --assignee "$IDENTITY_PRINCIPAL_ID" \
   --scope "/subscriptions/${SUBSCRIPTION_ID}" \
   --role "Contributor" \
-  --query "[0].id" -o tsv &>/dev/null; then
-  
+  --query "[0].id" -o tsv 2>/dev/null || true)
+
+if [[ -z "$EXISTING_ROLE" ]]; then
   info "Waiting for identity propagation (15 seconds)..."
   sleep 15
-  
+
   az role assignment create \
     --assignee "$IDENTITY_PRINCIPAL_ID" \
     --role "Contributor" \
@@ -342,7 +356,7 @@ done
 
 # Add Workload Identity pod label to provider deployments so the AKS
 # mutating webhook injects the OIDC projected token volume.
-# (The webhook filters on pod label azure.workload.identity/use=true)
+# (The webhook filters on pod label azure.workload.identity/use=true, NOT the SA label)
 info "Adding Workload Identity pod label to provider deployments"
 for PROVIDER_SA in "${DISCOVERED_SAS[@]}"; do
   DEP_NAME="$PROVIDER_SA"   # deployment name matches SA name
@@ -356,6 +370,16 @@ done
 # Restart provider pods to pick up the new service account annotations + pod labels
 info "Restarting provider pods to apply Workload Identity configuration"
 kubectl delete pods -n crossplane-system -l pkg.crossplane.io/provider --wait=false 2>/dev/null || true
+
+# Wait for provider pods to be ready again before proceeding
+info "Waiting for provider pods to recover after restart (up to 3 min)..."
+sleep 10  # give the new pods a moment to be scheduled
+for p in provider-azure-dbforpostgresql provider-azure-management; do
+  if kubectl get provider "$p" &>/dev/null; then
+    kubectl wait "provider/$p" --for=condition=Healthy --timeout=180s 2>/dev/null || \
+      warn "Provider $p not healthy yet — continuing anyway"
+  fi
+done
 
 # Apply ProviderConfig - OIDCTokenFile tells the provider to use Workload Identity
 info "Applying ProviderConfig for Workload Identity"
@@ -380,13 +404,10 @@ kubectl apply -f "$REPO_ROOT/infrastructure/definitions/"
 kubectl apply -f "$REPO_ROOT/infrastructure/compositions/"
 
 ###############################################################################
-# 9. Bootstrap Argo CD — root Application (app-of-apps)
-###############################################################################
-info "Applying Argo CD root Application"
-kubectl apply -f "$REPO_ROOT/bootstrap/root.yaml"
-
-###############################################################################
 # 9. Azure Container Registry (ACR)
+#
+# Runs BEFORE the root app (step 11) so AKS can already pull images from ACR
+# when Argo CD syncs the dashboard application.
 ###############################################################################
 info "Setting up Azure Container Registry: $ACR_NAME"
 if az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
@@ -413,6 +434,9 @@ az aks update \
 
 ###############################################################################
 # 10. Create PostgreSQL admin password secret
+#
+# Runs BEFORE the root app (step 11) so the Crossplane composition can find
+# the secret when it provisions the FlexibleServer.
 ###############################################################################
 info "Creating PostgreSQL admin password secret"
 if kubectl get secret dashboard-db-pg-password -n crossplane-system &>/dev/null; then
@@ -426,7 +450,17 @@ else
 fi
 
 ###############################################################################
-# 11. Wait for platform services (Harbor, ingress-nginx)
+# 11. Bootstrap Argo CD — root Application (app-of-apps)
+#
+# Steps 9-10 (ACR + PG secret) run first so that when Argo CD syncs the
+# dashboard app, AKS can already pull from ACR and the composition can
+# find the password secret.
+###############################################################################
+info "Applying Argo CD root Application"
+kubectl apply -f "$REPO_ROOT/bootstrap/root.yaml"
+
+###############################################################################
+# 12. Wait for platform services (Harbor, ingress-nginx)
 ###############################################################################
 info "Waiting for Argo CD to sync platform services (this may take 3-5 minutes)..."
 
@@ -502,7 +536,7 @@ if [[ -n "$LB_IP" ]]; then
   git -C "$REPO_ROOT" add -A
   git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null || \
     git -C "$REPO_ROOT" commit -m "auto: update nip.io hostnames to ${LB_IP}" --quiet
-  git -C "$REPO_ROOT" push --quiet 2>/dev/null || warn "Git push failed — push manually after script completes"
+  git -C "$REPO_ROOT" push --quiet || warn "Git push failed — push manually after script completes"
 
   # Force Argo CD to re-sync Harbor and Dashboard with updated hostnames
   info "Syncing Argo CD apps with updated hostnames"
@@ -517,7 +551,7 @@ else
 fi
 
 ###############################################################################
-# 12. Configure Harbor proxy-cache project
+# 13. Configure Harbor proxy-cache project
 ###############################################################################
 info "Setting up Harbor proxy-cache for Docker Hub"
 
@@ -587,7 +621,7 @@ else
 fi
 
 ###############################################################################
-# 13. Build & push dashboard image to ACR
+# 14. Build & push dashboard image to ACR
 ###############################################################################
 if $HAS_DOCKER; then
   IMAGE_TAG="$(date +%Y%m%d)-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)"
