@@ -64,13 +64,19 @@ else
 fi
 
 ###############################################################################
-# 1. Azure Resource Group
+# 1. Azure Resource Group + Resource Provider Registration
 ###############################################################################
 info "Creating Resource Group: $RESOURCE_GROUP ($LOCATION)"
 az group create \
   --name "$RESOURCE_GROUP" \
   --location "$LOCATION" \
   --output none
+
+# Register required Azure resource providers (idempotent, no-op if already registered)
+info "Registering Azure resource providers"
+for rp in Microsoft.DBforPostgreSQL Microsoft.ContainerRegistry; do
+  az provider register --namespace "$rp" --wait 2>/dev/null || true
+done
 
 ###############################################################################
 # 2. AKS Cluster (idempotent — skips if already exists)
