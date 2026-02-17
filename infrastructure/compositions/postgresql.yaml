@@ -60,6 +60,9 @@ spec:
               kind: FlexibleServer
               spec:
                 deletionPolicy: Delete
+                writeConnectionSecretToRef:
+                  namespace: crossplane-system
+                  name: ""                         # patched below
                 forProvider:
                   location: uksouth
                   resourceGroupNameSelector:
@@ -73,6 +76,15 @@ spec:
                   storageMb: 32768                 # patched below
                   version: "16"                    # patched below
             patches:
+              # writeConnectionSecretToRef name (unique per composite)
+              - type: FromCompositeFieldPath
+                fromFieldPath: metadata.uid
+                toFieldPath: spec.writeConnectionSecretToRef.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "pg-conn-%s"
               # storage
               - type: FromCompositeFieldPath
                 fromFieldPath: spec.parameters.storageGB
