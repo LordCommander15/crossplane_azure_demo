@@ -515,8 +515,8 @@ fi
 ###############################################################################
 info "Setting up Harbor proxy-cache for Docker Hub"
 
-# Port-forward Harbor service in background
-kubectl port-forward svc/harbor -n harbor "${HARBOR_PF_PORT}:80" &>/dev/null &
+# Port-forward Harbor core service in background
+kubectl port-forward svc/harbor-core -n harbor "${HARBOR_PF_PORT}:80" &>/dev/null &
 HARBOR_PF_PID=$!
 sleep 5
 
