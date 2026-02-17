@@ -12,11 +12,11 @@
 #    7. Azure Workload Identity + ProviderConfig
 #    8. XRD + Composition (kubectl apply)
 #    9. Azure Container Registry (ACR) — create + attach to AKS
-#   10. PostgreSQL admin password secret
-#   11. Argo CD root Application (app-of-apps bootstrap)
-#   12. Wait for platform services (Harbor, ingress-nginx)
-#   13. Configure Harbor proxy-cache project
-#   14. Build & push dashboard image to ACR
+#   10. Build & push dashboard image to ACR
+#   11. PostgreSQL admin password secret
+#   12. Argo CD root Application (app-of-apps bootstrap)
+#   13. Wait for platform services (Harbor, ingress-nginx)
+#   14. Configure Harbor proxy-cache project
 ###############################################################################
 set -euo pipefail
 
@@ -433,9 +433,43 @@ az aks update \
   --output none 2>/dev/null || info "ACR already attached"
 
 ###############################################################################
-# 10. Create PostgreSQL admin password secret
+# 10. Build & push dashboard image to ACR
 #
-# Runs BEFORE the root app (step 11) so the Crossplane composition can find
+# Runs BEFORE the root app (step 12) so the image already exists in ACR when
+# Argo CD syncs the dashboard and AKS tries to pull it.
+###############################################################################
+if $HAS_DOCKER; then
+  IMAGE_TAG="$(date +%Y%m%d)-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)"
+  ACR_IMAGE="${ACR_LOGIN_SERVER}/dashboard/dashboard"
+
+  info "Logging in to ACR"
+  az acr login --name "$ACR_NAME" 2>/dev/null || warn "ACR login failed — image push will be skipped"
+
+  info "Building dashboard image"
+  docker build \
+    -t "${ACR_IMAGE}:${IMAGE_TAG}" \
+    -t "${ACR_IMAGE}:latest" \
+    "$REPO_ROOT/apps/dashboard"
+
+  info "Pushing dashboard image to ACR"
+  docker push "${ACR_IMAGE}:${IMAGE_TAG}" || warn "Push of tag ${IMAGE_TAG} failed"
+  docker push "${ACR_IMAGE}:latest" || warn "Push of tag latest failed"
+
+  info "Image pushed to ACR:"
+  echo "    ${ACR_IMAGE}:${IMAGE_TAG}"
+  echo "    ${ACR_IMAGE}:latest"
+else
+  warn "Docker not available — skipping image build."
+  warn "Build and push manually BEFORE the dashboard pod will start:"
+  warn "  az acr login --name $ACR_NAME"
+  warn "  docker build -t ${ACR_LOGIN_SERVER:-acrplatformdemo.azurecr.io}/dashboard/dashboard:latest apps/dashboard/"
+  warn "  docker push ${ACR_LOGIN_SERVER:-acrplatformdemo.azurecr.io}/dashboard/dashboard:latest"
+fi
+
+###############################################################################
+# 11. Create PostgreSQL admin password secret
+#
+# Runs BEFORE the root app (step 12) so the Crossplane composition can find
 # the secret when it provisions the FlexibleServer.
 ###############################################################################
 info "Creating PostgreSQL admin password secret"
@@ -450,17 +484,18 @@ else
 fi
 
 ###############################################################################
-# 11. Bootstrap Argo CD — root Application (app-of-apps)
+# 12. Bootstrap Argo CD — root Application (app-of-apps)
 #
-# Steps 9-10 (ACR + PG secret) run first so that when Argo CD syncs the
-# dashboard app, AKS can already pull from ACR and the composition can
-# find the password secret.
+# Steps 9-11 (ACR, image push, PG secret) run first so that when Argo CD
+# syncs the dashboard app:
+#   - The image already exists in ACR (no ErrImagePull)
+#   - The password secret is in place for the Crossplane composition
 ###############################################################################
 info "Applying Argo CD root Application"
 kubectl apply -f "$REPO_ROOT/bootstrap/root.yaml"
 
 ###############################################################################
-# 12. Wait for platform services (Harbor, ingress-nginx)
+# 13. Wait for platform services (Harbor, ingress-nginx)
 ###############################################################################
 info "Waiting for Argo CD to sync platform services (this may take 3-5 minutes)..."
 
@@ -551,7 +586,7 @@ else
 fi
 
 ###############################################################################
-# 13. Configure Harbor proxy-cache project
+# 14. Configure Harbor proxy-cache project
 ###############################################################################
 info "Setting up Harbor proxy-cache for Docker Hub"
 
@@ -618,37 +653,6 @@ if $HARBOR_UP; then
   fi
 else
   warn "Harbor API not reachable — proxy-cache setup skipped. Configure manually later."
-fi
-
-###############################################################################
-# 14. Build & push dashboard image to ACR
-###############################################################################
-if $HAS_DOCKER; then
-  IMAGE_TAG="$(date +%Y%m%d)-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo latest)"
-  ACR_IMAGE="${ACR_LOGIN_SERVER}/dashboard/dashboard"
-
-  info "Logging in to ACR"
-  az acr login --name "$ACR_NAME" 2>/dev/null || warn "ACR login failed — image push will be skipped"
-
-  info "Building dashboard image"
-  docker build \
-    -t "${ACR_IMAGE}:${IMAGE_TAG}" \
-    -t "${ACR_IMAGE}:latest" \
-    "$REPO_ROOT/apps/dashboard"
-
-  info "Pushing dashboard image to ACR"
-  docker push "${ACR_IMAGE}:${IMAGE_TAG}" || warn "Push of tag ${IMAGE_TAG} failed"
-  docker push "${ACR_IMAGE}:latest" || warn "Push of tag latest failed"
-
-  info "Image pushed to ACR:"
-  echo "    ${ACR_IMAGE}:${IMAGE_TAG}"
-  echo "    ${ACR_IMAGE}:latest"
-else
-  warn "Docker not available — skipping image build."
-  warn "Build and push manually:"
-  warn "  az acr login --name $ACR_NAME"
-  warn "  docker build -t ${ACR_LOGIN_SERVER:-acrplatformdemo.azurecr.io}/dashboard/dashboard:latest apps/dashboard/"
-  warn "  docker push ${ACR_LOGIN_SERVER:-acrplatformdemo.azurecr.io}/dashboard/dashboard:latest"
 fi
 
 # Clean up port-forward

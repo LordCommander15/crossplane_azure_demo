@@ -28,21 +28,25 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.db.connectionSecretName }}
                   key: host
+                  optional: true
             - name: DB_PORT
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.db.connectionSecretName }}
                   key: port
+                  optional: true
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.db.connectionSecretName }}
                   key: username
+                  optional: true
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.db.connectionSecretName }}
                   key: password
+                  optional: true
           livenessProbe:
             httpGet:
               path: /healthz
