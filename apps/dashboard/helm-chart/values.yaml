@@ -36,5 +36,5 @@ db:
   name: postgres
   storageGB: 32
   version: "16"
-  location: westeurope
+  location: uksouth
   connectionSecretName: dashboard-db-conn

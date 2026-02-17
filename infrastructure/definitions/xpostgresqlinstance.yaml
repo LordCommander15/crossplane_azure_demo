@@ -52,7 +52,7 @@ spec:
                     location:
                       type: string
                       description: "Azure region for the database resources."
-                      default: "westeurope"
+                      default: "uksouth"
                   required: []
               required:
                 - parameters
