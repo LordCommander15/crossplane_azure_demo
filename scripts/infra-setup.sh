@@ -10,13 +10,14 @@
 #    5. GitHub repo credentials for Argo CD + git push auth
 #    6. Crossplane providers + functions
 #    7. Azure Workload Identity + ProviderConfig
-#    8. XRD + Composition (kubectl apply)
+#    8. XRD + Composition (kubectl apply, PG_LOCATION baked in)
 #    9. Azure Container Registry (ACR) — create + attach to AKS
 #   10. Build & push dashboard image to ACR
 #   11. PostgreSQL admin password secret
 #   12. Argo CD root Application (app-of-apps bootstrap)
 #   13. Wait for platform services (Harbor, ingress-nginx)
-#   14. Configure Harbor proxy-cache project
+#   14. Wait for PostgreSQL to provision + verify connection secret
+#   15. Configure Harbor proxy-cache project
 ###############################################################################
 set -euo pipefail
 
@@ -31,6 +32,9 @@ K8S_VERSION="${K8S_VERSION:-1.34.2}"
 NODE_COUNT="${NODE_COUNT:-1}"
 NODE_VM_SIZE="${NODE_VM_SIZE:-Standard_B2s}"
 ACR_NAME="${ACR_NAME:-acrplatformdemo}"
+# PostgreSQL Flexible Server location — separate from AKS location because
+# westeurope triggers LocationIsOfferRestricted for PG on many subscriptions.
+PG_LOCATION="${PG_LOCATION:-uksouth}"
 HARBOR_ADMIN_PASS="${HARBOR_ADMIN_PASS:-ChangeMeNow!}"
 HARBOR_PF_PORT=8880
 #──────────────────────────────────────────────────────────────────────────────
@@ -398,8 +402,21 @@ EOF
 
 ###############################################################################
 # 8. Apply XRD + Composition
+#
+# Ensure the PG_LOCATION is baked into the XRD default and composition bases
+# so the claim provisions the FlexibleServer in the correct region.
+# westeurope often triggers LocationIsOfferRestricted — default is uksouth.
 ###############################################################################
-info "Applying Crossplane XRD and Composition"
+info "Applying Crossplane XRD and Composition (PG location: $PG_LOCATION)"
+
+# Update location defaults in definition + composition + dashboard values
+sed -i "s|default: \".*\"|default: \"${PG_LOCATION}\"|" \
+  "$REPO_ROOT/infrastructure/definitions/xpostgresqlinstance.yaml"
+sed -i "s|location: westeurope|location: ${PG_LOCATION}|g" \
+  "$REPO_ROOT/infrastructure/compositions/postgresql.yaml"
+sed -i "s|^  location: .*|  location: ${PG_LOCATION}|" \
+  "$REPO_ROOT/apps/dashboard/helm-chart/values.yaml"
+
 kubectl apply -f "$REPO_ROOT/infrastructure/definitions/"
 kubectl apply -f "$REPO_ROOT/infrastructure/compositions/"
 
@@ -566,6 +583,10 @@ if [[ -n "$LB_IP" ]]; then
   sed -i "s|host: dashboard\..*\.nip\.io|host: ${DASHBOARD_HOST}|" \
     "$REPO_ROOT/apps/dashboard/helm-chart/values.yaml"
 
+  # Ensure db.location in values.yaml matches PG_LOCATION
+  sed -i "s|location: .*|location: ${PG_LOCATION}|" \
+    "$REPO_ROOT/apps/dashboard/helm-chart/values.yaml"
+
   # Commit + push updated hostnames so Argo CD picks them up
   info "Committing updated nip.io hostnames to Git"
   git -C "$REPO_ROOT" add -A
@@ -586,7 +607,66 @@ else
 fi
 
 ###############################################################################
-# 14. Configure Harbor proxy-cache project
+# 14. Wait for PostgreSQL Flexible Server to provision
+#
+# The Crossplane claim triggers provisioning in PG_LOCATION (default uksouth).
+# Azure takes ~5-10 min to create the FlexibleServer. Once READY, the
+# connection secret (dashboard-db-conn) appears automatically in the
+# dashboard namespace, and the volume-mounted pod picks it up on next request.
+###############################################################################
+info "Waiting for PostgreSQL Flexible Server to become ready (may take 5-10 minutes)..."
+PG_READY=false
+for i in {1..40}; do
+  # Get the FlexibleServer MR name dynamically
+  FS_NAME=$(kubectl get flexibleserver --no-headers -o custom-columns=":metadata.name" 2>/dev/null | head -1 || true)
+  if [[ -n "$FS_NAME" ]]; then
+    READY=$(kubectl get flexibleserver "$FS_NAME" \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    SYNCED=$(kubectl get flexibleserver "$FS_NAME" \
+      -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null || true)
+    echo "  [$(date +%H:%M:%S)] FlexibleServer: SYNCED=$SYNCED  READY=$READY"
+
+    if [[ "$READY" == "True" ]]; then
+      PG_READY=true
+      info "PostgreSQL Flexible Server is READY!"
+      break
+    fi
+
+    # Check for LocationIsOfferRestricted early and warn loudly
+    FS_MSG=$(kubectl get flexibleserver "$FS_NAME" \
+      -o jsonpath='{.status.conditions[?(@.type=="LastAsyncOperation")].message}' 2>/dev/null || true)
+    if echo "$FS_MSG" | grep -q "LocationIsOfferRestricted" 2>/dev/null; then
+      warn "LocationIsOfferRestricted! PG Flexible Server blocked in the chosen region."
+      warn "Change PG_LOCATION to a different region (current: ${PG_LOCATION})."
+      warn "Available fallbacks: uksouth, swedencentral, eastus, eastus2"
+      warn "Then: delete the stuck claim, update values, and re-run."
+      break
+    fi
+  else
+    echo "  [$(date +%H:%M:%S)] Waiting for FlexibleServer managed resource to appear..."
+  fi
+  sleep 15
+done
+
+if $PG_READY; then
+  # Verify the connection secret made it to the dashboard namespace
+  info "Checking for dashboard connection secret..."
+  for i in {1..20}; do
+    if kubectl get secret dashboard-db-conn -n dashboard &>/dev/null; then
+      info "Connection secret 'dashboard-db-conn' is available in the dashboard namespace!"
+      break
+    fi
+    echo "  Waiting for connection secret... ($((i*5))s / 100s)"
+    sleep 5
+  done
+else
+  warn "PostgreSQL did not become ready within the timeout."
+  warn "  Check: kubectl get postgresqlinstance -A"
+  warn "  Check: kubectl describe flexibleserver"
+fi
+
+###############################################################################
+# 15. Configure Harbor proxy-cache project
 ###############################################################################
 info "Setting up Harbor proxy-cache for Docker Hub"
 
@@ -666,8 +746,9 @@ info "Platform bootstrap complete!"
 echo ""
 echo "  ── Azure ──────────────────────────────────────────────────────────"
 echo "    Resource Group : $RESOURCE_GROUP"
-echo "    AKS Cluster    : $CLUSTER_NAME"
+echo "    AKS Cluster    : $CLUSTER_NAME  (region: $LOCATION)"
 echo "    ACR            : ${ACR_LOGIN_SERVER:-$ACR_NAME}"
+echo "    PG Location    : $PG_LOCATION  (separate from AKS region)"
 echo "    Managed Identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
 echo ""
 echo "  ── Reconnect ────────────────────────────────────────────────────"
