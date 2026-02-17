@@ -13,12 +13,23 @@ import psycopg2
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ── Database configuration (populated from the Crossplane connection secret) ──
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
+# ── Database configuration ───────────────────────────────────────────────────
+# Reads from volume-mounted secret files on every request so the dashboard
+# self-heals once the Crossplane connection secret appears (~5-10 min).
+# Falls back to env vars → hardcoded defaults.
+# ─────────────────────────────────────────────────────────────────────────────
+DB_SECRET_DIR = os.getenv("DB_SECRET_DIR", "/etc/db-secrets")
 DB_NAME = os.getenv("DB_NAME", "postgres")
-DB_USER = os.getenv("DB_USER", "pgadmin")
-DB_PASS = os.getenv("DB_PASSWORD", "")
+
+
+def _read_secret(key, fallback=""):
+    """Read a value from volume-mounted secret file, falling back to default."""
+    path = os.path.join(DB_SECRET_DIR, key)
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return fallback
 
 TEMPLATE = """
 <!doctype html>
@@ -54,12 +65,25 @@ TEMPLATE = """
 """
 
 
+def _get_db_config():
+    """Read DB config from mounted secret files (refreshed by kubelet)."""
+    return {
+        "host": _read_secret("host"),
+        "port": _read_secret("port", "5432"),
+        "user": _read_secret("username", "pgadmin"),
+        "password": _read_secret("password"),
+    }
+
+
 def _check_db():
     """Return (True, version_string) or (False, error_message)."""
+    cfg = _get_db_config()
+    if not cfg["host"]:
+        return False, "Waiting for database to be provisioned..."
     try:
         conn = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT,
-            dbname=DB_NAME, user=DB_USER, password=DB_PASS,
+            host=cfg["host"], port=cfg["port"],
+            dbname=DB_NAME, user=cfg["user"], password=cfg["password"],
             connect_timeout=3,
         )
         cur = conn.cursor()
@@ -74,14 +98,15 @@ def _check_db():
 
 @app.route("/")
 def index():
+    cfg = _get_db_config()
     db_ok, info = _check_db()
     return render_template_string(
         TEMPLATE,
         db_ok=db_ok,
         db_version=info if db_ok else "",
         db_error="" if db_ok else info,
-        db_host=DB_HOST,
-        db_port=DB_PORT,
+        db_host=cfg["host"] or "(pending)",
+        db_port=cfg["port"],
     )
 
 

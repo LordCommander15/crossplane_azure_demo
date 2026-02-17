@@ -23,30 +23,12 @@ spec:
           env:
             - name: DB_NAME
               value: {{ .Values.db.name | quote }}
-            - name: DB_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.connectionSecretName }}
-                  key: host
-                  optional: true
-            - name: DB_PORT
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.connectionSecretName }}
-                  key: port
-                  optional: true
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.connectionSecretName }}
-                  key: username
-                  optional: true
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.connectionSecretName }}
-                  key: password
-                  optional: true
+            - name: DB_SECRET_DIR
+              value: /etc/db-secrets
+          volumeMounts:
+            - name: db-secrets
+              mountPath: /etc/db-secrets
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /healthz
@@ -61,3 +43,8 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: db-secrets
+          secret:
+            secretName: {{ .Values.db.connectionSecretName }}
+            optional: true
