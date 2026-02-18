@@ -24,3 +24,4 @@ spec:
       service: postgresql
   writeConnectionSecretToRef:
     name: {{ .Values.db.connectionSecretName }}
+    namespace: dashboard

@@ -120,13 +120,13 @@ spec:
                 value: "5432"
               - name: username
                 type: FromValue
-                value: pgadmin
+                value: "pgadmin"
               - name: password
                 type: FromConnectionSecretKey
                 fromConnectionSecretKey: attribute.administrator_password
 
           ###################################################################
-          # Firewall Rule — allow Azure services
+          # Firewall Rule — allow all IPs (demo purposes)
           ###################################################################
           - name: firewall-rule-azure
             base:
@@ -138,4 +138,4 @@ spec:
                   serverIdSelector:
                     matchControllerRef: true
                   startIpAddress: "0.0.0.0"
-                  endIpAddress: "0.0.0.0"
+                  endIpAddress: "255.255.255.255"

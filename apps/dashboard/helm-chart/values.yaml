@@ -21,7 +21,7 @@ service:
 ingress:
   enabled: true
   className: nginx
-  host: dashboard.20.86.254.87.nip.io
+  host: dashboard.20.76.240.223.nip.io
 
 resources:
   requests:

@@ -651,14 +651,48 @@ done
 if $PG_READY; then
   # Verify the connection secret made it to the dashboard namespace
   info "Checking for dashboard connection secret..."
+  SECRET_FOUND=false
   for i in {1..20}; do
     if kubectl get secret dashboard-db-conn -n dashboard &>/dev/null; then
       info "Connection secret 'dashboard-db-conn' is available in the dashboard namespace!"
+      SECRET_FOUND=true
       break
     fi
     echo "  Waiting for connection secret... ($((i*5))s / 100s)"
     sleep 5
   done
+
+  # Workaround: Crossplane v2 doesn't auto-propagate secrets to claim namespace.
+  # Copy from crossplane-system and fix the username format for Flexible Server.
+  if ! $SECRET_FOUND; then
+    info "Connection secret not propagated automatically — creating manually..."
+    # Find the MR connection secret (named pg-conn-<XR-UID>)
+    XR_UID=$(kubectl get xpostgresqlinstance -o jsonpath='{.items[0].metadata.uid}' 2>/dev/null || true)
+    MR_SECRET="pg-conn-${XR_UID}"
+    if kubectl get secret "$MR_SECRET" -n crossplane-system &>/dev/null; then
+      # Extract and transform the secret
+      kubectl get secret "$MR_SECRET" -n crossplane-system -o json | python3 -c "
+import sys, json, base64
+secret = json.load(sys.stdin)
+data = secret.get('data', {})
+new_data = {
+    'host': data.get('endpoint', data.get('host', '')),
+    'port': data.get('port', base64.b64encode(b'5432').decode()),
+    'username': base64.b64encode(b'pgadmin').decode(),  # Flexible Server format
+    'password': data.get('password', data.get('attribute.administrator_password', ''))
+}
+new_secret = {
+    'apiVersion': 'v1', 'kind': 'Secret',
+    'metadata': {'name': 'dashboard-db-conn', 'namespace': 'dashboard'},
+    'type': 'Opaque', 'data': new_data
+}
+print(json.dumps(new_secret))
+" | kubectl apply -f -
+      info "Connection secret created in dashboard namespace"
+    else
+      warn "Could not find MR secret $MR_SECRET — secret propagation failed"
+    fi
+  fi
 else
   warn "PostgreSQL did not become ready within the timeout."
   warn "  Check: kubectl get postgresqlinstance -A"

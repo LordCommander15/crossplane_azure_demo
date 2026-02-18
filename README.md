@@ -37,12 +37,16 @@ The script performs these steps:
 3. Configures GitHub credentials for Argo CD
 4. Installs Crossplane Azure providers with Workload Identity
 5. Applies the PostgreSQL XRD (custom API) and Composition
-6. Applies the Argo CD root Application — this triggers the GitOps cascade
-7. Creates the PostgreSQL admin password secret
-8. Waits for platform services and configures Harbor
-9. Builds the dashboard Docker image locally
+6. Creates Azure Container Registry (ACR) and attaches to AKS
+7. Builds and pushes the dashboard Docker image to ACR
+8. Creates the PostgreSQL admin password secret
+9. Applies the Argo CD root Application — this triggers the GitOps cascade
+10. Waits for platform services (Harbor, ingress-nginx) and configures nip.io hostnames
+11. Waits for PostgreSQL Flexible Server to provision (~5-10 min)
+12. Creates connection secret in dashboard namespace (workaround for Crossplane v2)
+13. Configures Harbor proxy-cache for Docker Hub
 
-After the script, you push the image to Harbor and Argo CD handles the rest.
+After the script completes, the dashboard should show a successful database connection.
 
 ---
 
@@ -117,7 +121,7 @@ Developers don't need to know Azure — they just create a `PostgreSQLInstance` 
 │  │  │    │                                                             │  │  │
 │  │  │    ├─► ResourceGroup (rg-dashboard-db)                           │  │  │
 │  │  │    ├─► FlexibleServer (PostgreSQL 16, Standard_B1ms)             │  │  │
-│  │  │    └─► FirewallRule (allow Azure services)                       │  │  │
+│  │  │    └─► FirewallRule (allow all IPs for demo)                     │  │  │
 │  │  └──────────────────────────────────────────────────────────────────┘  │  │
 │  │                                                                        │  │
 │  │  ┌──────────────────────────────────────────────────────────────────┐  │  │
@@ -151,10 +155,10 @@ Developers don't need to know Azure — they just create a `PostgreSQLInstance` 
 │  │  Azure Managed Services                                                │  │
 │  │                                                                        │  │
 │  │  PostgreSQL Flexible Server (managed by Crossplane)                    │  │
-│  │    - SKU: Standard_B1ms                                                │  │
-│  │    - Version: 16                                                       │  │
+│  │    - SKU: Standard_B1ms (Burstable tier)                               │  │
+│  │    - Version: 16.11                                                    │  │
 │  │    - Storage: 32 GiB                                                   │  │
-│  │    - Location: westeurope                                              │  │
+│  │    - Location: uksouth (avoids LocationIsOfferRestricted)              │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -234,3 +238,95 @@ crossplane_azure_demo/
 └── .github/workflows/
     └── ci.yaml                      # CI: lint, validate, build & push
 ```
+
+---
+
+## Deployment Results
+
+After running `./scripts/infra-setup.sh`, you should see the dashboard displaying:
+
+```
+🌍 Global Warning System
+Dashboard v1.0
+
+✔ Database connected (PostgreSQL 16.11 on x86_64-pc-linux-gnu)
+
+Host: <server-name>.postgres.database.azure.com:5432
+```
+
+### Example Deployment Output
+
+```
+── Azure ──────────────────────────────────────────────────────────
+  Resource Group : rg-platform-demo
+  AKS Cluster    : aks-platform-demo  (region: westeurope)
+  ACR            : acrplatformdemo.azurecr.io
+  PG Location    : uksouth  (separate from AKS region)
+  Managed Identity: crossplane-identity
+
+── Ingress URLs (via nip.io) ─────────────────────────────────────
+  Argo CD   : http://argocd.<LB-IP>.nip.io
+  Harbor    : http://harbor.<LB-IP>.nip.io  (admin / ChangeMeNow!)
+  Dashboard : http://dashboard.<LB-IP>.nip.io
+
+── Verify ─────────────────────────────────────────────────────────
+  kubectl get ingress -A                     # Ingress resources
+  kubectl get applications -n argocd         # Argo CD apps
+  kubectl get providers                      # Crossplane providers
+  kubectl get postgresqlinstances -A         # DB claims
+  kubectl get pods -n dashboard              # Dashboard app
+```
+
+---
+
+## Troubleshooting
+
+### PostgreSQL Location Restrictions
+
+Azure blocks PostgreSQL Flexible Server creation in some regions (e.g., `westeurope`) with error `LocationIsOfferRestricted`. The default `PG_LOCATION` is set to `uksouth` to avoid this.
+
+To change the region:
+```bash
+PG_LOCATION=swedencentral ./scripts/infra-setup.sh
+```
+
+### Connection Secret Not Appearing
+
+Crossplane v2 may not automatically propagate connection secrets from the XR to the claim namespace. The bootstrap script includes a workaround that:
+
+1. Waits for the secret to appear in the `dashboard` namespace
+2. If it doesn't appear within 100 seconds, copies it from `crossplane-system`
+3. Fixes the username format for Azure Flexible Server (`pgadmin` instead of `pgadmin@servername`)
+
+### Firewall Rule for AKS
+
+The composition includes a firewall rule that allows all IPs (`0.0.0.0` – `255.255.255.255`) for demo purposes. In production, restrict this to your AKS outbound IPs or use Private Endpoints.
+
+### Dashboard Shows "Database unreachable"
+
+Check these in order:
+
+1. **PostgreSQL is ready:**
+   ```bash
+   kubectl get flexibleserver -o wide
+   ```
+
+2. **Connection secret exists:**
+   ```bash
+   kubectl get secret dashboard-db-conn -n dashboard
+   ```
+
+3. **Secret has correct keys:**
+   ```bash
+   kubectl get secret dashboard-db-conn -n dashboard -o jsonpath='{.data}' | base64 -d
+   ```
+
+4. **Firewall allows AKS:**
+   ```bash
+   kubectl get flexibleserverfirewallrule
+   ```
+
+5. **Restart dashboard to pick up new secret:**
+   ```bash
+   kubectl rollout restart deployment -n dashboard
+   ```
