@@ -9,13 +9,13 @@ expose:
     enabled: false
   ingress:
     hosts:
-      core: harbor.20.23.22.49.nip.io
+      core: harbor.52.142.233.4.nip.io
     className: nginx
     controller: default
     annotations:
       nginx.ingress.kubernetes.io/proxy-body-size: "0"
 
-externalURL: http://harbor.20.23.22.49.nip.io
+externalURL: http://harbor.52.142.233.4.nip.io
 
 trivy:
   enabled: false
