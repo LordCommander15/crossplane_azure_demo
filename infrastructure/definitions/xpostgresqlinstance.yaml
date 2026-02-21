@@ -47,7 +47,7 @@ spec:
                     version:
                       type: string
                       description: "PostgreSQL major version."
-                      default: "uksouth"
+                      default: "16"
                       enum: ["14", "15", "16"]
                     location:
                       type: string
