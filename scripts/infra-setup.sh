@@ -410,8 +410,8 @@ EOF
 info "Applying Crossplane XRD and Composition (PG location: $PG_LOCATION)"
 
 # Update location defaults in definition + composition + dashboard values
-sed -i "s|default: \".*\"|default: \"${PG_LOCATION}\"|" \
-  "$REPO_ROOT/infrastructure/definitions/xpostgresqlinstance.yaml"
+# Update only the location default in definition
+sed -i '/location:/!b;n;s|default: \".*\"|default: \"'"${PG_LOCATION}"'\"|' "$REPO_ROOT/infrastructure/definitions/xpostgresqlinstance.yaml"
 sed -i "s|location: westeurope|location: ${PG_LOCATION}|g" \
   "$REPO_ROOT/infrastructure/compositions/postgresql.yaml"
 sed -i "s|^  location: .*|  location: ${PG_LOCATION}|" \
